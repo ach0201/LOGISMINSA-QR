@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#3f3f3f">
+  <title>AHK Inspection - Lector QR</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <style>
+    body{font-family:Arial,sans-serif;margin:0;padding:20px;background:#f5f5f5;color:#333}
+    main{max-width:520px;margin:0 auto;background:#fff;padding:20px;border-radius:12px}
+    h2{margin-top:0;color:#3f3f3f}
+    #reader{width:100%;max-width:420px;margin:16px auto}
+    #estado{padding:12px;background:#f5f5f5;border-radius:8px;min-height:20px}
+    button{border:0;border-radius:7px;padding:12px 16px;background:#e83f4b;color:white;font-weight:bold}
+    button.sec{background:#56595c}
+    .acciones{display:flex;gap:8px;flex-wrap:wrap}
+    .nota{font-size:13px;color:#666;line-height:1.45}
+  </style>
+</head>
+<body>
+<main>
+  <h2>Escanear precinto</h2>
+  <p>Centra el código QR dentro del recuadro. Al detectarlo, el código regresará al formulario de AHK Inspection.</p>
+  <div id="reader"></div>
+  <p id="estado" role="status">Preparando cámara...</p>
+  <div class="acciones">
+    <button type="button" id="btnIniciar">INICIAR CÁMARA</button>
+    <button type="button" class="sec" id="btnCerrar">CERRAR</button>
+  </div>
+  <p class="nota">La cámara se utiliza únicamente para leer el QR. Esta página no guarda información ni se conecta a la base de datos.</p>
+</main>
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const token = params.get('token') || '';
+  const returnOrigin = params.get('returnOrigin') || '';
+  const estado = document.getElementById('estado');
+  let lector = null;
+  let activo = false;
+  let finalizado = false;
+
+  function informar(mensaje) { estado.textContent = mensaje; }
+
+  function validarRetorno() {
+    if (!token || !returnOrigin) return false;
+    try {
+      const u = new URL(returnOrigin);
+      return u.protocol === 'https:' &&
+        (u.hostname === 'script.google.com' ||
+         u.hostname.endsWith('.googleusercontent.com'));
+    } catch (e) { return false; }
+  }
+
+  async function detener() {
+    if (lector && activo) {
+      try { await lector.stop(); } catch (e) {}
+      try { lector.clear(); } catch (e) {}
+    }
+    activo = false;
+  }
+
+  async function iniciar() {
+    if (finalizado) return;
+    if (!validarRetorno()) {
+      informar('No se pudo validar la sesión de AHK Inspection. Cierra esta ventana y vuelve a intentarlo desde el formulario.');
+      return;
+    }
+    if (!window.Html5Qrcode) {
+      informar('No se pudo cargar el lector QR. Verifica la conexión a internet.');
+      return;
+    }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      informar('Este navegador no habilita la cámara en esta página. Verifica que se esté usando HTTPS.');
+      return;
+    }
+    try {
+      if (!lector) lector = new Html5Qrcode('reader');
+      if (activo) return;
+      await lector.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 230, height: 230 } },
+        async (texto) => {
+          if (finalizado) return;
+          const codigo = String(texto || '').trim();
+          if (!codigo || !window.opener || window.opener.closed) {
+            informar('No se encontró el formulario de AHK Inspection. Cierra esta ventana y vuelve a intentarlo.');
+            await detener();
+            return;
+          }
+          finalizado = true;
+          await detener();
+          window.opener.postMessage({
+            type: 'AHK_QR_RESULT',
+            token: token,
+            code: codigo
+          }, returnOrigin);
+          informar('QR leído. Regresando a AHK Inspection...');
+          setTimeout(() => window.close(), 500);
+        },
+        () => {}
+      );
+      activo = true;
+      informar('Cámara activa. Enfoca el código QR del precinto.');
+    } catch (e) {
+      informar('No se pudo iniciar la cámara. Revisa el permiso de cámara de este sitio y vuelve a intentar.');
+    }
+  }
+
+  document.getElementById('btnIniciar').addEventListener('click', iniciar);
+  document.getElementById('btnCerrar').addEventListener('click', async () => {
+    await detener();
+    window.close();
+  });
+  if (validarRetorno()) iniciar();
+  else informar('Sesión no válida. Abre el lector desde el formulario de AHK Inspection.');
+  window.addEventListener('beforeunload', detener);
+})();
+</script>
+</body>
+</html>
